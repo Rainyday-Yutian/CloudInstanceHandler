@@ -1,0 +1,14 @@
+Metadata-Version: 2.1
+Name: crazy-cloud-instance-handler
+Version: 1.0.0
+Summary: A tool to handle cloud instance data from Alibaba Cloud, AWS, etc.
+Home-page: UNKNOWN
+Author: Crazy
+Author-email: raindream233@foxmail.com
+License: UNKNOWN
+Platform: UNKNOWN
+Requires-Python: >=3.7
+License-File: LICENSE
+
+UNKNOWN
+
