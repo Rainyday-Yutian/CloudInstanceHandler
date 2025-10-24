@@ -1,227 +1,11 @@
-import pandas as pd
-import json,requests
-import datetime,time,os
-from pprint import pprint 
-
+import json,requests,time
 from urllib.parse import quote
 import hashlib,hmac
 
-import volcenginesdkcore
+from cloudinstancehandler.volcengine.VolcInstance import *
+
 import volcenginesdkecs,volcenginesdkredis,volcenginesdkrdsmysqlv2,volcenginesdkclb,volcenginesdkvpc
-import volcenginesdkvolcobserve
 from volcenginesdkcore.rest import ApiException
-
-
-def getVolcengineModulesVersion():
-    return "v1.1.3"
-
-# 云监控通用 #
-def getTimeDict(start_offset_days=0,end_offset_days=0,start_offset_hours=0,end_offset_hours=0,start_offset_minutes=0,end_offset_minutes=0,start_datetime=None,end_datetime=None):
-    """
-    此方法基于基底时间和偏移量参数来生成时间范围字典： 起始时间或结束时间 = 基底时间 - 偏移量。
-    当end_datetime未被指定时，默认使用当前时间作为基底时间进行偏移计算。
-    当start_datetime未被指定时，默认使用end_datetime(此处指已被偏移过的end_datetime)作为基底时间进行偏移计算；
-    即起始时间和结束时间如果都未被指定，则默认使用当前时间作为基底时间进行偏移计算。
-    当end_datetime和start_datetime都被指定时，则各自分别作为起始时间和结束时间的基底时间。
-    """
-    if end_datetime is None:
-        end_datetime = datetime.datetime.now()
-    end_datetime = end_datetime - datetime.timedelta(days=end_offset_days,hours=end_offset_hours,minutes=end_offset_minutes)
-    if start_datetime:
-        start_datetime = start_datetime - datetime.timedelta(days=start_offset_days,hours=start_offset_hours,minutes=start_offset_minutes)
-    else:
-        start_datetime = end_datetime - datetime.timedelta(days=start_offset_days,hours=start_offset_hours,minutes=start_offset_minutes)
-    start_datetime.replace(second=0)
-    end_datetime.replace(second=0)
-    if start_datetime > end_datetime:
-        raise ValueError("Start time must be earlier than End time!")
-    if end_datetime-start_datetime > datetime.timedelta(days=60):
-        print("Warnings: Time range is too long!!")
-    TimeDict = {
-        "start_datetime":start_datetime,
-        "end_datetime":end_datetime,
-        "start_timestamp":int(start_datetime.timestamp()),
-        "end_timestamp":int(end_datetime.timestamp()),
-        "start_timestring":start_datetime.strftime('%Y-%m-%d %H:%M:%S'),
-        "end_timestring":end_datetime.strftime('%Y-%m-%d %H:%M:%S'),
-        "start_timestring_iso8601":start_datetime.strftime("%Y-%m-%dT%H:%M:%S")+"+08:00",
-        "end_timestring_iso8601":end_datetime.strftime("%Y-%m-%dT%H:%M:%S")+"+08:00"
-        }
-    print(f"{TimeDict['start_timestring']} -> {TimeDict['end_timestring']}")
-    return TimeDict
-
-# -------------------------------------- 基础类 ---------------------------------------- #
-__CurrentPath__ = os.path.dirname(os.path.realpath(__file__)) + "/"
-__DataPath__ = __CurrentPath__ + "data/"
-
-class BasicDataFrame():
-    def __init__(self)-> None:
-        self.InsType = self.__class__.__name__
-        self.Prefix = "VCM" # "Volcengine"
-        self.InsInfo:pd.DataFrame = pd.DataFrame()
-        self.InsData:pd.DataFrame = pd.DataFrame()
-
-    def saveInsInfo(self,one_sheet=True,rename_suffix=None,Path=__CurrentPath__,split_by="self_RegionId")-> None:
-        if rename_suffix:
-            filename = Path + f'{self.Prefix}_{self.InsType}_Info_{rename_suffix}.xlsx'
-        else:
-            filename = Path + f'{self.Prefix}_{self.InsType}_Info.xlsx'
-        print("Exporting InsInfo to Excel: ", filename)
-        writer = pd.ExcelWriter(filename)
-        if one_sheet:
-            self.InsInfo.to_excel(writer,sheet_name="ALL",index=False)
-        elif one_sheet == False and split_by in self.InsInfo.columns:
-            for sample in self.InsInfo[split_by].unique():
-                df_info = self.InsInfo[self.InsInfo[split_by] == sample]
-                df_info.to_excel(writer,sheet_name=sample,index=False)
-        else:
-            # raise ValueError("split_by must be in InsInfo.columns")
-            print(f"split_by '{split_by}' must be in InsInfo.columns, saveing to one sheet!")
-            self.InsInfo.to_excel(writer,sheet_name="ALL",index=False)
-        writer.close()
-        
-    def saveInsData(self,one_sheet=True,rename_suffix="Data",Path=__CurrentPath__,split_by="self_RegionId")-> None:
-        filename = Path + f'{self.Prefix}_{self.InsType}_{rename_suffix}.xlsx'
-        print("Exporting InsData to Excel: ", filename)
-        writer = pd.ExcelWriter(filename)
-        if one_sheet:
-            self.InsData.to_excel(writer,sheet_name="All",index=False)
-        elif one_sheet == False and split_by in self.InsData.columns:
-            for sample in self.InsData[split_by].unique():
-                df_data = self.InsData[self.InsData[split_by] == sample]
-                df_data.to_excel(writer,sheet_name=sample,index=False)
-        writer.close()
-
-    def saveOtherData(self,df,rename_suffix="MoreInfo",format="xlsx",Path=__CurrentPath__)-> None:
-        if format == "xlsx":
-            filename = Path + f'{self.Prefix}_{self.InsType}_{rename_suffix}.xlsx'
-            print(f"Exporting {rename_suffix} Data to Excel: ", filename)
-            df.to_excel(filename,sheet_name="All",index=False)
-        elif format == "csv":
-            filename = Path + f'{self.Prefix}_{self.InsType}_{rename_suffix}.csv'
-            print(f"Exporting {rename_suffix} Data to CSV: ", filename)
-            df.to_csv(filename,index=False)
-        else:
-            raise ValueError("Format must be 'csv' or 'xlsx'")
-
-    def saveAll(self)-> None:
-        self.saveInsInfo()
-        self.saveInsData()
-
-    def Filter(self,df,field,string,operator="contain"):
-        pass
-
-class VCMInstance(BasicDataFrame):
-    def __init__(self,ak,sk):
-        super().__init__()
-        self.InsType = self.__class__.__name__
-        self.AK = ak
-        self.SK = sk
-        self.Namespace:str = None
-        self.SubNamespace:str = None
-        self.Dimensions:str = "ResourceID"
-    
-    # def getMetricData(self,region_id,instance_id_list:list,metric_name:str,TimeDict:object,period:str="5m",StatisticsApproach:list=['max'],GroupBy:str='id',DisplayMetricName=None) -> pd.DataFrame:
-    def getMetricData(self,instance_id_list:list,metric_name:str,TimeDict:object,period:str="5m",groupby:str=None,StatisticsApproach:list=['max'],GroupBy:str="ResourceID",DisplayMetricName:str=None,region_id:str="cn-shanghai",page_size:int=200) -> pd.DataFrame:
-        """
-        GroupBy: id, timestamp, None 或 []
-            id: 以id进行分组统计的依据
-            timestamp: 以时间戳进行分组统计的依据
-            None 或 []: 不分组直接进行统计
-
-        StatisticsApproach: last, max, min, avg, max_95, raw
-        本函数定义的StatisticsApproach参数，表示是方法中指定的TimeDict参数为统计周期，以GroupBy进行分组，对值进行StatisticsApproach指定方式统计
-            last: TimeDict指定的时间范围内，以GroupBy进行分组统计，取最新的值。
-            max、min、avg: TimeDict指定的时间范围内，以GroupBy进行分组统计，取最大值、最小值、平均值。
-            max_95: TimeDict指定的时间范围内，以GroupBy进行分组统计，取95%分位数。
-            all: TimeDict指定的时间范围内，以GroupBy进行分组统计，统计以上所有值。
-            raw/[]/None: 不进行分组统计，直接返回原始数据，此时GroupBy参数无效。
-
-        namesapce | metric_name | sub_namespace: 
-        官方查询地址https://console.volcengine.com/cloud_monitor/docs
-        """
-        # 参数合法性检查及初始化
-        Dimensions_List:list = self.Dimensions.split(',')
-        if GroupBy == 'ResourceID':
-            GroupBy = self.Dimensions
-        if GroupBy not in ['timestamp',None]+Dimensions_List:
-            raise ValueError(f"Invalid GroupBy value '{GroupBy}'. Allowed values are: {', '.join([self.Dimensions,'timestamp','obj:None'])}")
-
-        allowed_StatisticsApproach = ['last', 'max', 'min', 'avg', 'max_95','all','raw']
-        if 'all' in StatisticsApproach:
-            StatisticsApproach = allowed_StatisticsApproach[:-1]
-        elif 'raw' in StatisticsApproach or StatisticsApproach == [] or StatisticsApproach is None:
-            StatisticsApproach = None
-        elif not set(StatisticsApproach).issubset(set(allowed_StatisticsApproach)):
-            raise ValueError(f"Invalid StatisticsApproach value(s): {set(StatisticsApproach) - set(allowed_StatisticsApproach)}. Allowed values are: {', '.join(allowed_StatisticsApproach)}")
-        
-        if DisplayMetricName is None:
-            DisplayMetricName = metric_name
-
-        # 请求初始化
-        configuration = volcenginesdkcore.Configuration()
-        configuration.ak = self.AK
-        configuration.sk = self.SK
-        configuration.region = region_id
-
-        instances = []
-        for instance_id in instance_id_list:
-            instances.append(
-                volcenginesdkvolcobserve.InstanceForGetMetricDataInput(
-                    dimensions=[
-                        volcenginesdkvolcobserve.DimensionForGetMetricDataInput(
-                            name=self.Dimensions,
-                            value=instance_id,
-                        )
-                    ]
-                )
-            )
-        df_data = pd.DataFrame()
-        try:
-            api_instance = volcenginesdkvolcobserve.VOLCOBSERVEApi(volcenginesdkcore.ApiClient(configuration))
-            response = api_instance.get_metric_data(volcenginesdkvolcobserve.GetMetricDataRequest(
-                start_time=TimeDict['start_timestamp'], end_time=TimeDict['end_timestamp'], period=period,
-                namespace=self.Namespace, sub_namespace=self.SubNamespace,metric_name=metric_name,
-                instances=instances
-            ))
-            response_json = response.to_dict()
-            for ins_data in response_json.get('data').get('metric_data_results'):
-                df_tmp = pd.DataFrame(ins_data.get('data_points'))
-                for dimension in ins_data.get('dimensions'):
-                    df_tmp[dimension.get('name')] = dimension.get('value')
-                df_data = pd.concat([df_data, df_tmp])    
-        except ApiException as e:
-            print("\nError: Exception when calling GetMetricData: %s\n" % e)
-            return df_data
-
-        # 沿用阿里云的方法，由于火山云接口没有统计一说，即没有statistics参数，返回数据统一命名为value
-        statistic = "value"
-        aggregation_functions = {}
-        if StatisticsApproach:
-            if "last" in StatisticsApproach:
-                aggregation_functions[f'{DisplayMetricName}_last'] = (f'{statistic}', lambda x: x.iloc[x.index.get_loc(x.idxmax())])
-            if "max" in StatisticsApproach:
-                aggregation_functions[f'{DisplayMetricName}_max'] = (f'{statistic}', 'max')
-            if "min" in StatisticsApproach:
-                aggregation_functions[f'{DisplayMetricName}_min'] = (f'{statistic}', 'min')
-            if "avg" in StatisticsApproach:
-                aggregation_functions[f'{DisplayMetricName}_avg'] = (f'{statistic}', 'mean')
-            if "max_95" in StatisticsApproach:
-                aggregation_functions[f'{DisplayMetricName}_max_95'] = (f'{statistic}', lambda x: x.quantile(0.95))
-            if "sum" in StatisticsApproach:
-                aggregation_functions[f'{DisplayMetricName}_sum'] = (f'{statistic}', 'sum')
-            # if "raw" in StatisticsApproach:
-            #     aggregation_functions[f'{DisplayMetricName}'] = (f'{metric_name}', 'list')
-            if GroupBy:
-                df_data = df_data.groupby(GroupBy).agg(**aggregation_functions).reset_index()
-            else:
-                df_data = df_data.agg(**aggregation_functions).reset_index()
-        else:
-            print('Parmas StatisticsApproach has contain "raw", return raw data!')
-        return df_data
-
-    def getInsInfo(self):
-        pass
 
 # 抽象出来的通用请求类，用于未适配SDK的接口，后续代码过长时考虑拆分
 class VCMServiceCommonRequest():
@@ -419,7 +203,7 @@ class VCMGetResourceCountsRequest(VCMServiceCommonRequest):
         return self.Response.get("Result", None)
 
 # -------------------------------------- 实例类  ---------------------------------------- #
-class ECS(VCMInstance):
+class ECS(VolcInstance):
     def __init__(self,ak,sk):
         super().__init__(ak,sk)
         self.Namespace = "VCM_ECS"
@@ -515,7 +299,7 @@ class ECS(VCMInstance):
             self.InsInfo = pd.merge(self.InsInfo,self.SpecInfo,on='instance_type_id',how='left')
         return df_data
 
-class RDS(VCMInstance):
+class RDS(VolcInstance):
     def __init__(self,ak,sk):
         super().__init__(ak,sk)
         self.Namespace = "VCM_RDS_MySQL"
@@ -612,7 +396,7 @@ class RDS(VCMInstance):
             self.InsInfo = pd.merge(self.InsInfo, df_data, on='instance_id', how='left')
         return df_data
     
-class Redis(VCMInstance):
+class Redis(VolcInstance):
     def __init__(self,ak,sk):
         super().__init__(ak,sk)
         self.Namespace = "VCM_Redis"
@@ -653,7 +437,7 @@ class Redis(VCMInstance):
         self.InsInfo = pd.concat([self.InsInfo,df_data],axis=0,ignore_index=True)
         return df_data
         
-class CLB(VCMInstance):
+class CLB(VolcInstance):
     def __init__(self,ak,sk):
         super().__init__(ak,sk)
         self.Namespace = "VCM_CLB"
@@ -706,7 +490,7 @@ class CLB(VCMInstance):
         self.InsInfo = pd.concat([self.InsInfo,df_data],axis=0,ignore_index=True)
         return df_data
     
-class BandwidthPackage(VCMInstance):
+class BandwidthPackage(VolcInstance):
     def __init__(self,AK,SK):
         super().__init__(AK,SK)
         self.Namespace = "VCM_BandwidthPackage"
@@ -795,7 +579,7 @@ class BandwidthPackage(VCMInstance):
             # EIPForBwRank.getBindedInfo()
         return df_data
     
-class EIP(VCMInstance):
+class EIP(VolcInstance):
     def __init__(self,AK,SK):
         super().__init__(AK,SK)
         self.Namespace = "VCM_EIP"
@@ -916,7 +700,7 @@ class EIP(VCMInstance):
         # return df_ins_all
         
 
-class OBServer(VCMInstance):
+class OBServer(VolcInstance):
     def __init__(self,AK,SK):
         super().__init__(AK,SK)
 

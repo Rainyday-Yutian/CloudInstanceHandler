@@ -1,94 +1,119 @@
-# GetAliyunInsData
-## requirements
-```txt
+# CloudInstanceHandler
+
+> 统一接口的多云实例监控指标采集工具  
+> 支持阿里云、华为云等主流云厂商，提供标准化的数据获取与聚合统计能力。
+
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+---
+
+## 🌟 特性
+- **统一接口**：通过 `getMetricData()` 方法一致地获取不同云平台的监控数据
+- **多云支持**：已支持阿里云（AliyunInstance）、华为云（HwyunInstance）
+- **自动分页**：智能处理云平台 API 的数据点限制（如华为云 ≤3000 点/请求）
+- **灵活聚合**：支持按实例、时间等维度进行 `max`/`min`/`avg`/`95分位` 等统计
+- **模块化设计**：基于抽象基类 `BasicDataFrame`，易于扩展新云平台
+- **生产就绪**：包含错误重试、限流等待、类型校验等健壮性设计
+
+<br>
+
+## 📦 安装
+### 拉取并安装
+```bash
+git clone https://github.com/Rainyday-Yutian/CloudInstanceHandler.git
+cd CloudIntanceHandler
+pip install -e .
 ```
-## CHANGELOG
-### CloudInstanceDataHandler v1
-* 将老版代码合并，正式成立可用项目 CloudInstanceDataHandler
+
+<!-- ## requirements
+```txt
+``` -->
+<br>
+
+## 🧠 核心数据结构与工作流
+`BasicDataFrame` 是本项目的核心抽象基类，定义了多云监控数据采集的统一数据模型与操作范式。它通过三个关键属性管理数据生命周期：
+
+### 1. `self.InsInfo` — 实例元信息仓库
+- **用途**：存储从云平台获取的**实例基础信息**（如 ID、区域、类型、状态等）。
+- **数据来源**：由子类实现的 `getInsInfo()` 方法填充。
+- **累积行为**：  
+  每次调用 `getInsInfo()` **不会清空已有数据**，而是将新获取的实例信息**追加**到 `self.InsInfo` 中。  
+  因此，`self.InsInfo` 本质上是一个**累积型数据池**，可跨多次调用聚合不同区域、不同类型的实例。
+<!-- - **扩展设计**：  
+  后续方法（如 `getMoreInfo()`）将支持 `merge=True` 参数，自动将扩展信息与 `self.InsInfo` 合并，保持数据完整性。 -->
+
+> ✅ 适用场景：先分批拉取多个地域的 ECS 实例，再统一查询其监控指标。
+
+
+### 2. `self.InsData` — 实例监控数据视图
+
+- **用途**：存储**结合元信息与监控指标**的最终分析数据集。
+- **数据来源**：由 `getInsData()` 方法生成，其内部会：
+  1. 读取当前 `self.InsInfo` 中的所有实例；
+  2. 根据实例类型、产品特性（如 Redis 集群版 vs 标准版）、字段映射（如共享带宽使用 `BandwidthPackageId`）等逻辑，**动态调用 `getMetricData()`**；
+  3. 将返回的时序指标与 `self.InsInfo` **按实例 ID 对齐并合并**；
+  4. 将结果写入 `self.InsData`。
+- **覆盖行为**：  
+  每次调用 `getInsData()` **会先清空 `self.InsData`**，再重新生成。  
+  因此，`self.InsData` 始终反映**基于当前 `self.InsInfo` 的最新监控视图**。
+- **灵活性**：  
+  子类可重写 `getInsData()` 以适配不同云产品的特殊逻辑（如指标命名差异、维度字段名不同等）。
+
+> ✅ 适用场景：在已加载所有 ECS 实例后，一键生成包含 CPU、内存、网络等指标的完整分析表。
+
+### 3. `self.MetricData` — 原始时序指标缓存（可选）
+
+- **用途**：临时缓存 `getMetricData()` 返回的原始监控数据（通常为时间序列）。
+- **使用方式**：可直接用于 `statisticMetricData()` 进行聚合统计，或作为中间结果供调试。
+- **非持久化**：不参与 `saveInsInfo()` / `saveInsData()` 的自动保存流程。
+
+<br>
+
+## 🚀 典型工作流示例
+
+```python
+# 1. 初始化客户端
+# client = AliyunInstance(ak="xxx", sk="xxx")
+client = ECS(ak="xxx", sk="xxx")
+
+# 2. 分批加载实例（累积到 InsInfo）
+client.getInsInfo(region_id="cn-hangzhou")
+client.getInsInfo(region_id="cn-shanghai")  # InsInfo 现在包含两地实例
+
+# 3. 生成带监控指标的完整数据集（覆盖 InsData）
+client.getInsData(metric_name="CPUUtilization", period="300")
+
+# 4. 保存结果
+client.saveInsInfo()   # 保存所有实例元信息
+client.saveInsData()   # 保存带指标的分析数据
+```
+
+<br>
+
+## 💡 设计理念
+- **分层清晰**：元信息（`InsInfo`）与指标数据（`InsData`）分离，便于复用与调试。
+- **云无关抽象**：通过子类实现差异逻辑，基类提供统一接口与数据管理。
+- **面向分析**：内置 `statisticMetricData()` 支持常用聚合（max/avg/95分位等），直接输出分析就绪数据。
+
+<br>
+
+## 🖼️ 更多示例
+- [华为云全域带宽指标推送 Prometheus](examples/push_hwyun_bwp_bandwidth_to_prometheus.py)
+
+
+<br>
+
+## 📝 CHANGELOG
+### v1.0.0
+* 重构，通过采用包布局和抽象基类的方式对代码库进行重新组织和调整
 * 修复华为共享带宽GEIP带宽排名中，因GEIP中有IPV6-ECS数据未适配而报错的问题
 
 
+<br>
 
-
+## 📜 许可证
+* 本项目基于 Apache License 2.0 开源。
 
 <br>
 
-_______________________________________________________________
-
-<br>
-
-## TODO
-### aliyuninsdatahandler v1.0.6:
-* 需要重新考虑和设计类属性，比如getEIPFlowRank获取到的数据应该如何分离存储、合并存储，每次执行是否会替换原有数据，还是作为补充数据 
-* 需要将getMetricData()的原始数据获取合并之后再进行数据处理，最新设计由getMetricsData或getInsData来实现
-* 需要在getInsData()中判断self.InsInfo是否有数据，无数据则调用对应产品可用区扫描获取所有地域数据，有数据则查询InsInfo中指定实例的数据
-
-### aliyuninsdatahandler v1.1.0
-* ~~之前的getInsData中获取实例使用率的代码实际为复杂需求的实现逻辑，应该分离到独立文件的主入口去实现，不再作为模块程序中通用的类方法~~
-* 后续考虑将获取云监控数据的方法进行与自定义统计方法的分离，以便于后续扩展
-* 诸如self.getMoreInfo()则为获取更多信息,其方法仅返回更多信息的部分，v1.1.0之后版本设计会考虑为这些方法新增参数merge:bool，为True时,会将更多信息与self.InsInfo合并，缺省为True
-  
-### aliyuninsdatahandler v1.1.1
-* getMetricsData/getInsData 需要适配多个metric以及displayname
-
-### aliyuninsdatahandler v1.1.2 
-* get\<InsType\>Info需要在至少下个版本开始重构并重命名为getInsInfo
-* 可用区获取需要在下个版本开始支持
-* 分页查询问题似乎也没设计好
-
-<br>
-
-## What's new(Old Version)
-
-
-## Doc
-### About Foundation Frame
-**BasicDataFrame.InsInfo**    
-  为实例的基底信息,由self.getInsInfo()方法获取并添置InsInfo，其方法最后返回当前单次调用获取到的数据副本  
-  即self.InsInfo类似存储队列，存储该对象所有（每次）调用 self.getInsInfo() 获取到的数据  
-  另外诸如self.getMoreInfo()则为获取更多信息,其方法仅返回更多信息的部分，v1.1.0之后版本设计会考虑为这些方法新增参数merge:bool，为True时,会将更多信息与self.InsInfo合并，缺省为True
-
-**BasicDataFrame.InsData**  
-为根据需求自由组合的实例数据，由self.getInsData()方法查询已保存在self.InsInfo中的实例的数据，一般为self.InsInfo + 自定义调用self.getMetricData()时返回的结果  
-即执行self.getInsData()时，会根据self.InsInfo中的实例信息，调用self.getMetricData()方法获取实例数据，并添加到self.InsData中  
-如共享带宽的实际InstanceId叫BandwidthPackageId，self.getInsData就需要实现适配每个云产品实际上的实例id字段名，  
-如Redis有标准版、集群版等版本，版本不同导致指标名称不同，self.getInsData就需要实现适配实例类型来调整调用getMetricData中的metric_name参数  
-最后拿到数据，根据并适配InsInfo字段名，将获取到的数据与InsInfo合并，添加至self.InsData中  
-self.InsData的存储逻辑与self.InsInfo不同，每次执行self.getInsData()时，会清空self.InsData，然后重新添加数据
-
-**TimeDict**  
-为时间字典，用于存储时间信息，如开始时间、结束时间、~~时间间隔~~等，用于调用self.getMetricData()时传递参数  
-支持多种时间格式类型，由getTimeDict()方法生成  
-  
-
-## 过期信息
-### aliyuninsdatahandler v1.1.2
-* 新增RDS类
-
-### aliyuninsdatahandler v1.1.1
-* 新增Cen相关实例类
-* 优化 TimeDict() 时间范围生成逻辑
-* 优化 getMetricData() Dimension相关处理，当Dimension维度过多或过于复杂时，支持自行传值
-* 优化并同步更新为基于新版 getMetricData() 的共享带宽EIP排行获取方法 CBWP.getEIPBandwidthRank()
-* 新增解析获取单个共享带宽内EIP信息方法 CBWP.extractEIPFromSingleCBWP()
-
-### aliyuninsdatahandler v1.1.0
-* 优化获取云监控最新数据的方法getMetricLast()
-* 重构获取云监控数据的方法getMetricData()，并可自定义进行数据统计
-* 从Instance类中拆离出新类InstanceBasicDataFrame，主要负责数据存储相关实现
-* 原Instance类（后需版本已更名为AliyunInstance），主要负责存储和初始化数据获取时需要的信息，以及通用方法实现（如：云监控数据获取）
-* 程序模块化设计：更多复杂需求的实现逻辑，将使用导入本模块的形式，在主程序中实现，用以更自由地实现需求细节
-
-### liyuninsdatahandler v1.0.6
-* 更新获取云监控数据获取方式，由get<InsType>Data改为getInsData，并优化获取逻辑
-* 修复获取ENI绑定实例信息时，由于一个ECS实例绑定多个，查询时会重复查询到多个相同ECS信息，并且在并表时，并表键为ECS的ID，导致出现重复数据的问题
-* 新增云企业网带宽包信息获取
-
-### aliyuninsdatahandler v1.0.5
-* 新增OSS信息数据获取
-  
-### aliyuninsdatahandler v1.0.4
-* 新增账号内全局搜索IP资源已经绑定实例信息（利用AntiDDoS API实现）
-
-
-### 
