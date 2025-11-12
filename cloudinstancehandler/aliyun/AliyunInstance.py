@@ -123,7 +123,7 @@ class AliyunInstance(BasicDataFrame):
                 print(f"Error occurred while calling statisticMetricData: {e}")
         return df_data
         
-    def getMetricData(self,instance_list:list,metric_name:str,TimeDict:dict,period:str="300",Dimensions:list=None,region_id:str="cn-hangzhou",page_size:int=50,sleep_time=0) -> pd.DataFrame:
+    def getMetricData(self,instance_list:list,metric_name:str,TimeDict:dict,period:str="300",Dimensions:list=None,region_id:str="cn-hangzhou",page_size:int=50,sleep_time=0,express=None) -> pd.DataFrame:
         """
         该方法使用的API：DescribeMetricData，单个 API 的调用次数限制为 10 次/秒
 
@@ -156,7 +156,8 @@ class AliyunInstance(BasicDataFrame):
         request.set_Period(period)
         request.set_StartTime(TimeDict["start_timestring"])
         request.set_EndTime(TimeDict["end_timestring"])
-        # request.set_Express(f'{{"groupby":[{self.Dimensions},"timestamp"]}}')
+        if express is None:
+            request.set_Express(f'{{"groupby":[{self.Dimensions},"timestamp"]}}')
         # request.set_Length('1440')
         # 阿里云接口最新不止支持到1440，后续有需求再编写分页查询，参考 generate_timestamps()
         # print(TimeDict['start_timestamp'])
@@ -209,7 +210,6 @@ class AliyunInstance(BasicDataFrame):
 
     # def getInsData():
     #     pass
-
 
 # 待办：需要优化，以最大长度为参数，生成时间戳
 # def generate_timestamps(start_timestamp, end_timestamp, period, max_length, instance_count):

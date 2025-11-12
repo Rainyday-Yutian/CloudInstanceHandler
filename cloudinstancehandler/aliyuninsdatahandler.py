@@ -327,30 +327,47 @@ class IPv6(AliyunInstance):
         self.namespace = "acs_ipv6_bandwidth"
         self.ProductCategory = "ipv6gateway"
 
-    # 老版查询代码，未更新，可能需要修改
-    def getIPv6Info(self,region_id,page_size=50) -> pd.DataFrame:
+    def getIPv6Info(self,region_id,instance_list:list=None,ipv6_address:list=None,page_size=50,merge=True,sleep_time=0.8) -> pd.DataFrame:
         if page_size > 50:
             # print("传参错误")
             return None
 
-        client = AcsClient(region_id=region_id, credential=self.credentials) 
+        client = AcsClient(region_id=region_id,credential=self.credentials) 
         request = DescribeIpv6AddressesRequest()
         request.set_accept_format('json')
-        request.set_PageSize(1)
         request.set_PageNumber(1)
-        response_json = json.loads(client.do_action_with_exception(request))
-        page_total = response_json['TotalCount'] // page_size + 1
-        df = pd.DataFrame()
-        request.set_PageSize(page_size)
-        for page_number in range(1,page_total+1):
-            # time.sleep(sleep_time)
-            request.set_PageNumber(page_number)
+        df_data = []
+        if instance_list:
+            request.set_PageSize(50)
+            for idx in range(0,len(instance_list),20):
+                batch_inslist_str = ",".join(instance_list[idx:idx+20])
+                request.set_Ipv6AddressId(batch_inslist_str)
+                response_json = json.loads(client.do_action_with_exception(request))
+                df_data.append(pd.DataFrame(response_json["Ipv6Addresses"]["Ipv6Address"]))
+                time.sleep(sleep_time)
+        elif ipv6_address:
+            for idx in range(0,len(ipv6_address),20):
+                batch_inslist_str = ",".join(ipv6_address[idx:idx+20])
+                request.set_Ipv6Address(batch_inslist_str)
+                response_json = json.loads(client.do_action_with_exception(request))
+                df_data.append(pd.DataFrame(response_json["Ipv6Addresses"]["Ipv6Address"]))
+                time.sleep(sleep_time)
+        elif instance_list is None and ipv6_address is None:
+            request.set_PageSize(1)
             response_json = json.loads(client.do_action_with_exception(request))
-            df_temp = pd.DataFrame(response_json["Ipv6Addresses"]["Ipv6Address"]) 
-            df = pd.concat([df, df_temp],axis=0,ignore_index=True)
-        df['self_RegionId'] = region_id
-        self.InsInfo = pd.concat([self.InsInfo,df],axis=0,ignore_index=True)
-        return df
+            page_total = response_json['TotalCount'] // page_size + 1
+            request.set_PageSize(page_size)
+            for page_number in range(1,page_total+1):
+                request.set_PageNumber(page_number)
+                response_json = json.loads(client.do_action_with_exception(request))
+                df_data.append(pd.DataFrame(response_json["Ipv6Addresses"]["Ipv6Address"]))
+        if df_data:
+            df_data = pd.concat(df_data,axis=0,ignore_index=True)
+        else:
+            df_data = pd.DataFrame()
+        if merge and not df_data.empty:
+            self.InsInfo = pd.concat([self.InsInfo,df_data],axis=0,ignore_index=True)
+        return df_data
 
     def extendInternetBwInfo(self,merge=True) -> pd.DataFrame:
         """
@@ -566,7 +583,10 @@ class EIP(AliyunInstance):
                 if len(instance_list) > 0:
                     MoreInfo = ENI(self.credentials)
                     df_ENI = MoreInfo.getENIInfo(region,instance_list)[['NetworkInterfaceId','InstanceId']].dropna(subset=['InstanceId'])
-                    if len(df_ENI) > 0:
+                    # 临时修复
+                    df_ENI = df_ENI[df_ENI['InstanceId'].str.strip() != '']
+                    instance_list = df_ENI['InstanceId'].drop_duplicates().to_list()
+                    if len(instance_list ) > 0:
                         MoreInfo = ECS(self.credentials)
                         df_ENI_ECS = MoreInfo.getECSInfo(region,df_ENI['InstanceId'].drop_duplicates().to_list())[['InstanceId','InstanceName']]
                         df_ENI_ECS = pd.merge(df_ENI,df_ENI_ECS,how="left",on='InstanceId').drop(['InstanceId'],axis=1)

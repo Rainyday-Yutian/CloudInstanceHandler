@@ -10,7 +10,7 @@
 
 ## 🌟 特性
 - **统一接口**：通过 `getMetricData()` 方法一致地获取不同云平台的监控数据
-- **多云支持**：已支持阿里云（AliyunInstance）、华为云（HwyunInstance）
+- **多云支持**：已支持阿里云（AliyunInstance）、华为云（HwyunInstance）、火山云（VolcInstance）
 - **自动分页**：智能处理云平台 API 的数据点限制（如华为云 ≤3000 点/请求）
 - **灵活聚合**：支持按实例、时间等维度进行 `max`/`min`/`avg`/`95分位` 等统计
 - **模块化设计**：基于抽象基类 `BasicDataFrame`，易于扩展新云平台
@@ -39,7 +39,7 @@ pip install -e .
 - **数据来源**：由子类实现的 `getInsInfo()` 方法填充。
 - **累积行为**：  
   每次调用 `getInsInfo()` **不会清空已有数据**，而是将新获取的实例信息**追加**到 `self.InsInfo` 中。  
-  因此，`self.InsInfo` 本质上是一个**累积型数据池**，可跨多次调用聚合不同区域、不同类型的实例。
+  因此，`self.InsInfo` 本质上是一个**累积型数据池**，可跨多次调用聚合不同区域的实例。
 <!-- - **扩展设计**：  
   后续方法（如 `getMoreInfo()`）将支持 `merge=True` 参数，自动将扩展信息与 `self.InsInfo` 合并，保持数据完整性。 -->
 

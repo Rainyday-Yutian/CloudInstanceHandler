@@ -16,8 +16,10 @@ from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 from cloudinstancehandler.hwyuninsdatahandler import *
 
 if __name__ == "__main__":
-   ak = "xxx"
-   sk = "xxx"
+   # ak = "xxx"
+   # sk = "xxx"
+   ak = os.getenv("HWYUN_AK",None)
+   sk = os.getenv("HWYUN_SK",None)
    
    VPN_BWP = GBWP(ak,sk)
    VPN_BWP.getInsInfo()
