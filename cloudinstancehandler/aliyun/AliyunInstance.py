@@ -1,3 +1,4 @@
+# cloudinstacehandler/aliyun/AliyunInstance.py
 import json,time
 
 from cloudinstancehandler.common.funcs import *
@@ -20,26 +21,27 @@ class AliyunInstance(BasicDataFrame):
         self.secret_key = secret_key
         self.namespace:str = None
         self.ProductCategory = None
-        # 当维度只有1时，应该使用DimensionsName这个变量名，Dimensions应该用于表达多维度，后期修改
-        # self.DimesionsName = 'instanceId'    
+        # 仅用于单一维度查询，如实例ID
+        # self.DimesionsName = 'instanceId'
         self.Dimensions:str = 'instanceId'
         self.prefix = 'Aliyun'
 
     # TimeDict之后可能会改为TimeRange或者TimeRangeDict
     # getMetricList需要兼容原本的二次统计功能
-    def getMetricList(self,instance_list:list,metric_name:str,TimeDict:dict,period:str='300',Dimensions:list=None,region_id:str='cn-hangzhou',page_size:int=50,sleep_time=0,field_name='Maximum',statistics_approach:list=['max'],group_by=None,rename_field_name=None) -> pd.DataFrame:
+    def getMetricList(self,metric_name:str,TimeDict:dict,period:str='300',dimensions_df:pd.DataFrame=None,instance_list:list=None,region_id:str='cn-hangzhou',page_size:int=50,sleep_time=0,field_name='Maximum',statistics_approach:list=['max'],group_by=None,rename_field_name=None) -> pd.DataFrame:
         """
         从阿里云云监控获取指定实例的指标数据，并可选进行二次聚合统计。
         支持跳过统计（返回原始数据）、单列统计、多方法聚合等灵活用法。
 
         Args:
-            instance_list (list): 实例 ID 列表，如 ['i-abc123', 'i-def456']。若 Dimensions 参数已提供，则此参数仅用于 fallback。
             metric_name (str): 指标名称，如 'CPUUtilization'。请参考官方文档确认可用指标：
                             https://cms.console.aliyun.com/metric-meta/acs_ecs_dashboard/ecs
             TimeDict (dict): 时间范围字典，使用 getTimeDict 函数生成。
             period (str): 统计周期（秒），默认 '300'（5分钟）。阿里云支持 60/300/900 等。
-            Dimensions (list, optional): 自定义维度列表，格式如 [{'instanceId': 'i-xxx'}, ...]。
-                                        若为 None，则根据 instance_list 和 self.Dimensions 自动生成。
+            dimensions_df (pd.DataFrame, optional): 自定义维度数据，在需要获取多维度数据时使用，在单一维度时也推荐使用。
+                                                与 instance_list 二选一。默认 None。
+            instance_list (list): 实例 ID 列表，如 ['i-abc123', 'i-def456']，根据 instance_list 和 self.Dimensions 自动生成。
+                                若 Dimensions 参数已提供，则此参数仅用于 fallback。大多数场景都只使用单一维度，所以作兼容性保留。
             region_id (str): 地域 ID，默认 'cn-hangzhou'。
             page_size (int): 每批次查询的维度数量（阿里云限制最大 50），默认 50。
             sleep_time (float): 批次间休眠时间（秒），用于避免 API 限流，默认 0。
@@ -70,11 +72,14 @@ class AliyunInstance(BasicDataFrame):
         if not self.namespace:
             raise ValueError("Namespace is not set. Please set Namespace in the subclass.")
 
-        # 自定义Dimensions参数是临时支持的，需要重写，构造Dimensions时，可以参考Dataframe，先铺平
-        if Dimensions is None:
+        if dimensions_df is not None and not dimensions_df.empty:
+            dimensions_list = dimensions_df.to_dict(orient='records')
+        elif instance_list is not None:
             dimensions_list = [{self.Dimensions: instanceId} for instanceId in instance_list]
+        # elif self.InsInfo:
+        #     dimensions_list = self.InsInfo[[ID_Field_Name]].rename({ID_Field_Name: self.Dimensions}).to_dict(orient='records')
         else:
-            dimensions_list = Dimensions
+            raise ValueError("Either dimensions_df or instance_list must be provided.")
 
         client = AcsClient(region_id=region_id, credential=self.credentials)
         request = DescribeMetricListRequest()
@@ -84,28 +89,29 @@ class AliyunInstance(BasicDataFrame):
         request.set_Period(period)
         request.set_StartTime(TimeDict["start_timestring"])
         request.set_EndTime(TimeDict["end_timestring"])
-        df_data = []
+        json_data = []
         # Todo: 需要记录日志或者报错
         for idx in range(0, len(dimensions_list),page_size):
             batch_dimensions_list = dimensions_list[idx:idx+page_size]
             request.set_Dimensions(batch_dimensions_list)    
             response_json = json.loads(client.do_action_with_exception(request))
-            df_data_clip = pd.DataFrame(json.loads(response_json.get('Datapoints', '[]')))
-            df_data.append(df_data_clip)
+            data_clip = json.loads(response_json.get('Datapoints', '[]'))
+            json_data.extend(data_clip)
             time.sleep(sleep_time)
 
-        if df_data:
-            df_data = pd.concat(df_data,ignore_index=True)
-            # if not df_data.empty:
-            #     df_data.sort_values(by=['Timestamp'],inplace=True)
-            self.MetricData = df_data
-        else:
-            df_data = pd.DataFrame()
+        if not json_data:
+            print("Not found any data for the specified instance and metric.")
+            return pd.DataFrame()
+        
+        df_data = pd.DataFrame(json_data)
+        # if not df_data.empty:
+        #     df_data.sort_values(by=['Timestamp'],inplace=True)
+        self.MetricData = df_data
 
         # 根据阿里云的云监控表查询，查看具体支持哪些数据列;目前BasicDataFrame.statisticMetricData()仅支持单个数据列的二次统计，后续可考虑支持多列.
-        if statistics_approach and field_name and not df_data.empty:
-            if rename_field_name is None:
-                rename_field_name = metric_name
+        if statistics_approach and field_name:
+            rename_field_name = rename_field_name or metric_name
+            group_by = group_by or self.Dimensions
             Allowed_Field_Name = ["Value","Maximum","Minimum","Average","Sum"]
             df_data_columns_set = set(df_data.columns)
             if field_name not in df_data_columns_set:
@@ -115,15 +121,13 @@ class AliyunInstance(BasicDataFrame):
                         break
             if 'Timestamp' in df_data.columns:
                 df_data.sort_values(by='Timestamp', inplace=True)
-            if group_by is None:
-                group_by = self.Dimensions
             try:
                 df_data = self.statisticMetricData(field_name=field_name,df_data=df_data,statistics_approach=statistics_approach,group_by=group_by,rename_field_name=rename_field_name)
             except Exception as e:
                 print(f"Error occurred while calling statisticMetricData: {e}")
         return df_data
         
-    def getMetricData(self,instance_list:list,metric_name:str,TimeDict:dict,period:str="300",Dimensions:list=None,region_id:str="cn-hangzhou",page_size:int=50,sleep_time=0,express=None) -> pd.DataFrame:
+    def getMetricData(self,instance_list:list,metric_name:str,TimeDict:dict,period:str="300",dimensions_df:list=None,region_id:str="cn-hangzhou",page_size:int=50,sleep_time=0,express=None) -> pd.DataFrame:
         """
         该方法使用的API：DescribeMetricData，单个 API 的调用次数限制为 10 次/秒
 
@@ -142,11 +146,14 @@ class AliyunInstance(BasicDataFrame):
         if not self.namespace:
             raise ValueError("Namespace is not set. Please set Namespace in the subclass.")
 
-        # 自定义Dimensions参数是临时支持的，需要重写，构造Dimensions时，可以参考Dataframe，先铺平
-        if Dimensions is None:
+        if dimensions_df is not None and not dimensions_df.empty:
+            dimensions_list = dimensions_df.to_dict(orient='records')
+        elif instance_list is not None:
             dimensions_list = [{self.Dimensions: instanceId} for instanceId in instance_list]
+        # elif self.InsInfo:
+        #     dimensions_list = self.InsInfo[[ID_Field_Name]].rename({ID_Field_Name: self.Dimensions}).to_dict(orient='records')
         else:
-            dimensions_list = Dimensions
+            raise ValueError("Either dimensions_df or instance_list must be provided.")
 
         client = AcsClient(region_id=region_id, credential=self.credentials)
         request = DescribeMetricDataRequest()
@@ -161,46 +168,70 @@ class AliyunInstance(BasicDataFrame):
         # request.set_Length('1440')
         # 阿里云接口最新不止支持到1440，后续有需求再编写分页查询，参考 generate_timestamps()
         # print(TimeDict['start_timestamp'])
-        df_data = pd.DataFrame()
+    
+        json_data = []
         for idx in range(0, len(dimensions_list),page_size):
             batch_dimensions_list = dimensions_list[idx:idx+page_size]
             request.set_Dimensions(batch_dimensions_list)    
             response_json = json.loads(client.do_action_with_exception(request))
-            df_data_temp = pd.DataFrame(json.loads(response_json.get('Datapoints', '[]')))
-            df_data = pd.concat([df_data, df_data_temp])
+            data_clip = json.loads(response_json.get('Datapoints', '[]'))
+            json_data.extend(data_clip)
             time.sleep(sleep_time)
+    
+        if not json_data:
+            print("Not found any data for the specified instance and metric.")
+            return pd.DataFrame()
+        
+        df_data = pd.DataFrame(json_data)
+        # if not df_data.empty:
+        #     df_data.sort_values(by=['Timestamp'],inplace=True)
         self.MetricData = df_data
         return df_data
     
-    def getMetricLast_NextToken(self,region_id,instance_list,metric_name,Period="60",TimeDict=None,rename_field_name=None,page_size=50) -> pd.DataFrame:
+    def getMetricLast_NextToken(self,region_id,metric_name,Period="60",dimensions_df:list=None,instance_list:list=None,TimeDict=None,rename_field_name=None,page_size=50,express=None) -> pd.DataFrame:
         if rename_field_name is None:
             rename_field_name = metric_name
         client = AcsClient(region_id=region_id, credential=self.credentials)
         # request = DescribeMetricListRequest()
         request = DescribeMetricLastRequest()
         request.set_accept_format('json')
+        request.set_Namespace(self.namespace)
         request.set_MetricName(metric_name)
         request.set_Period(Period)
         request.set_StartTime(TimeDict["start_timestring"])
         request.set_EndTime(TimeDict["end_timestring"])
-        request.set_Namespace(self.namespace)
-        request.set_Express('{"groupby":["userId","instanceId"]}')
+        if express is None:
+            request.set_Express(f'{{"groupby":[{self.Dimensions},"timestamp"]}}')
         request.set_Length("1000")
-        df_data = pd.DataFrame()
-        dimensions_list = [{"instanceId": instanceId} for instanceId in instance_list]
+        
+        if dimensions_df is not None and not dimensions_df.empty:
+            dimensions_list = dimensions_df.to_dict(orient='records')
+        elif instance_list is not None:
+            dimensions_list = [{self.Dimensions: instanceId} for instanceId in instance_list]
+        # elif self.InsInfo:
+        #     dimensions_list = self.InsInfo[[ID_Field_Name]].rename({ID_Field_Name: self.Dimensions}).to_dict(orient='records')
+        else:
+            raise ValueError("Either dimensions_df or instance_list must be provided.")
+        
+        json_data = []
         request.set_Dimensions(dimensions_list)
         response = client.do_action_with_exception(request)
         response_json = json.loads(response)
         if response_json['Success']:
-            df_data = pd.concat([df_data, pd.DataFrame(json.loads(response_json['Datapoints']))])
+            data_clip = json.loads(response_json.get('Datapoints', '[]'))
+            json_data.extend(data_clip)
             NextToken = response_json.get("NextToken")
             while(NextToken):
                 request.set_NextToken(NextToken)
-                df_data = pd.concat([df_data, pd.DataFrame(json.loads(response_json['Datapoints']))])
+                data_clip = json.loads(response_json.get('Datapoints', '[]'))
+                json_data.extend(data_clip)
         else:
             pprint(response)
-            print("Failed to obtain the data point!Return a empty dataframe!")
-            df_data = pd.DataFrame()
+            print("Failed to obtain the data point! Return a empty dataframe!")
+        if not json_data:
+            print("Not found any data for the specified instance and metric.")
+            return pd.DataFrame()
+        df_data = pd.DataFrame(json_data)
         df_data.rename(columns={col: f'{rename_field_name}_{col}' for col in df_data.columns if col not in ['instanceId','timestamp','userId']}, inplace=True)
         return df_data
     

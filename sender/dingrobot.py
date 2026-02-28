@@ -11,7 +11,7 @@ def getHostIP(ifname):
         IP = "<NIC_Interface_Notfound>"
     return IP
 
-def send_ding_message(title,message,more_info=True,content_color=None,at_mobiles=None,is_at_all=False,webhook=None,secret=None,debug=False):
+def send_ding_message(title,message,more_info=True,content_color=None,at_mobiles:list=None,is_at_all=False,webhook=None,secret=None,debug=False):
     # 当指定了secret和webhook参数时，以下默认配置不生效
     if (secret is None and webhook is None) or debug:
         # 不指定时默认发到如下
@@ -22,12 +22,11 @@ def send_ding_message(title,message,more_info=True,content_color=None,at_mobiles
     Now_Datetime = datetime.datetime.now()
     timestamp = str(round(Now_Datetime.timestamp() * 1000))
     if more_info:
-        message += f"> {getHostIP('eth0')}:{__file__}  \n{Now_Datetime.strftime('%Y-%m-%d %H:%M:%S')}  \n"
-    if at_mobiles and at_mobiles != '':
-        at_mobiles = at_mobiles.split(',')
+        message += f"> ExecLoc: {getHostIP('ens34')}:{__file__}  \nDate: {Now_Datetime.strftime('%Y-%m-%d %H:%M:%S')}  \n"
+    if at_mobiles and isinstance(at_mobiles, list):
         message+="> At："
         for mobile in at_mobiles:
-            message += f"@{mobile}"
+            message += f"@{mobile} "
     if content_color:
         message = f"<font color={content_color}>\n\n" + message + "</font>"
     if secret is not None and webhook is not None:
