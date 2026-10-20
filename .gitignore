@@ -26,6 +26,13 @@ env/
 .venv/
 .env/
 
+# Environment / credential files
+.env
+.env.*
+*.pem
+*.key
+credentials*
+
 # IDEs and editors
 .vscode/
 .idea/
@@ -33,6 +40,7 @@ env/
 *.swo
 
 # Custom
+archive/
 *.log
 FuncTest*.py
 test/

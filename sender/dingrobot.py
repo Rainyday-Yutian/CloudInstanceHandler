@@ -1,4 +1,4 @@
-import hmac,hashlib,base64,requests,json,urllib.parse,datetime,netifaces,sys
+import hmac,hashlib,base64,requests,json,urllib.parse,datetime,netifaces
 
 def getHostIP(ifname):
     try:
@@ -17,8 +17,9 @@ def send_ding_message(title,message,more_info=True,content_color=None,at_mobiles
         # 不指定时默认发到如下
         webhook = ''
         secret = ''
-    if sys.getsizeof(message) > 12000:
-        message = message[:12000]+"...  \n\n<font color=red>send_ding_message:Message is too long. 超过接口限制触发强制截断</font>  \n"
+    encoded = message.encode('utf-8')
+    if len(encoded) > 14000:
+        message = encoded[:14000].decode('utf-8', errors='ignore') + "...  \n\n<font color=red>send_ding_message:Message is too long. Exceeding the limit triggers truncation.  \n</font>  \n"
     Now_Datetime = datetime.datetime.now()
     timestamp = str(round(Now_Datetime.timestamp() * 1000))
     if more_info:

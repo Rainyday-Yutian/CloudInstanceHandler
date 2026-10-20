@@ -1,8 +1,10 @@
 import datetime,warnings
 from pprint import pprint
 
+from cloudinstancehandler.common.deprecated import deprecated_alias
+
 # 通用时间范围生成器 #
-def getTimeDict(start_offset_days=0,end_offset_days=0,start_offset_hours=0,end_offset_hours=0,start_offset_minutes=0,end_offset_minutes=0,start_datetime=None,end_datetime=None,print_time_range=True):
+def get_time_range(start_offset_days=0,end_offset_days=0,start_offset_hours=0,end_offset_hours=0,start_offset_minutes=0,end_offset_minutes=0,start_datetime=None,end_datetime=None,print_time_range=True):
     """
     生成时间范围字典，适用于云监控等需要时间区间的场景。
 
@@ -55,3 +57,10 @@ def getTimeDict(start_offset_days=0,end_offset_days=0,start_offset_hours=0,end_o
     if print_time_range:
         print(f"{TimeDict['start_timestring']} -> {TimeDict['end_timestring']}")
     return TimeDict
+
+
+# ==================== 已废弃的 camelCase 兼容别名 ==================== #
+@deprecated_alias("get_time_range")
+def getTimeDict(*args, **kwargs):  # noqa: N802
+    """[已废弃别名] 请改用 get_time_range"""
+    return get_time_range(*args, **kwargs)

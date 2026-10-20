@@ -3,6 +3,10 @@ import json,time
 
 from cloudinstancehandler.common.funcs import *
 from cloudinstancehandler.common.BasicDataFrame import *
+from cloudinstancehandler.common.deprecated import deprecated_alias
+
+from alibabacloud_tea_util import models as util_models
+from alibabacloud_tea_util.client import Client as UtilClient
 
 from aliyunsdkcore.client import AcsClient
 from aliyunsdkcore.auth.credentials import AccessKeyCredential
@@ -24,11 +28,12 @@ class AliyunInstance(BasicDataFrame):
         # 仅用于单一维度查询，如实例ID
         # self.DimesionsName = 'instanceId'
         self.Dimensions:str = 'instanceId'
-        self.prefix = 'Aliyun'
+        self.csp_name = 'Aliyun'
+        self.runtime = util_models.RuntimeOptions()
 
-    # TimeDict之后可能会改为TimeRange或者TimeRangeDict
-    # getMetricList需要兼容原本的二次统计功能
-    def getMetricList(self,metric_name:str,TimeDict:dict,period:str='300',dimensions_df:pd.DataFrame=None,instance_list:list=None,region_id:str='cn-hangzhou',page_size:int=50,sleep_time=0,field_name='Maximum',statistics_approach:list=['max'],group_by=None,rename_field_name=None) -> pd.DataFrame:
+    # TimeDict参数之后会统一改名为time_range（生成函数已更名为get_time_range，老名getTimeDict保留为废弃别名）
+    # get_metric_list需要兼容原本的二次统计功能
+    def get_metric_list(self,metric_name:str,TimeDict:dict,period:str='300',dimensions_df:pd.DataFrame=None,instance_list:list=None,region_id:str='cn-hangzhou',page_size:int=50,sleep_time=0,field_name='Maximum',statistics_approach:list=['max'],group_by=None,rename_field_name=None) -> pd.DataFrame:
         """
         从阿里云云监控获取指定实例的指标数据，并可选进行二次聚合统计。
         支持跳过统计（返回原始数据）、单列统计、多方法聚合等灵活用法。
@@ -36,7 +41,7 @@ class AliyunInstance(BasicDataFrame):
         Args:
             metric_name (str): 指标名称，如 'CPUUtilization'。请参考官方文档确认可用指标：
                             https://cms.console.aliyun.com/metric-meta/acs_ecs_dashboard/ecs
-            TimeDict (dict): 时间范围字典，使用 getTimeDict 函数生成。
+            TimeDict (dict): 时间范围字典，使用 get_time_range 函数生成。
             period (str): 统计周期（秒），默认 '300'（5分钟）。阿里云支持 60/300/900 等。
             dimensions_df (pd.DataFrame, optional): 自定义维度数据，在需要获取多维度数据时使用，在单一维度时也推荐使用。
                                                 与 instance_list 二选一。默认 None。
@@ -106,7 +111,7 @@ class AliyunInstance(BasicDataFrame):
         df_data = pd.DataFrame(json_data)
         # if not df_data.empty:
         #     df_data.sort_values(by=['Timestamp'],inplace=True)
-        self.MetricData = df_data
+        self.metric_data = df_data
 
         # 根据阿里云的云监控表查询，查看具体支持哪些数据列;目前BasicDataFrame.statisticMetricData()仅支持单个数据列的二次统计，后续可考虑支持多列.
         if statistics_approach and field_name:
@@ -122,19 +127,19 @@ class AliyunInstance(BasicDataFrame):
             if 'Timestamp' in df_data.columns:
                 df_data.sort_values(by='Timestamp', inplace=True)
             try:
-                df_data = self.statisticMetricData(field_name=field_name,df_data=df_data,statistics_approach=statistics_approach,group_by=group_by,rename_field_name=rename_field_name)
+                df_data = self.statistic_metric_data(field_name=field_name,df_data=df_data,statistics_approach=statistics_approach,group_by=group_by,rename_field_name=rename_field_name)
             except Exception as e:
-                print(f"Error occurred while calling statisticMetricData: {e}")
+                print(f"Error occurred while calling statistic_metric_data: {e}")
         return df_data
         
-    def getMetricData(self,instance_list:list,metric_name:str,TimeDict:dict,period:str="300",dimensions_df:list=None,region_id:str="cn-hangzhou",page_size:int=50,sleep_time=0,express=None) -> pd.DataFrame:
+    def get_metric_data(self,instance_list:list,metric_name:str,TimeDict:dict,period:str="300",dimensions_df:list=None,region_id:str="cn-hangzhou",page_size:int=50,sleep_time=0,express=None) -> pd.DataFrame:
         """
         该方法使用的API：DescribeMetricData，单个 API 的调用次数限制为 10 次/秒
 
         说明：
             与 DescribeMetricList 不同，该接口官方原生支持统计功能（即Dimension={"instanceId": "i-abcdefgh12****"}），将该账号下的所有监控数据进行聚合统计
-            介于 CloudInstanceHandler 支持了更丰富的统计功能，所以在非特殊情况下，建议优先使用 getMetricList 方法即可；
-            本方法 getMetricData 仅作为补充使用，且不再支持二次统计功能，不过仍然可以通过手动调用 self.statisticMetricData 方法进行二次统计）
+            介于 CloudInstanceHandler 支持了更丰富的统计功能，所以在非特殊情况下，建议优先使用 get_metric_list 方法即可；
+            本方法 get_metric_data 仅作为补充使用，且不再支持二次统计功能，不过仍然可以通过手动调用 self.statistic_metric_data 方法进行二次统计）
         """
         duration_time = TimeDict["end_datetime"] - TimeDict["start_datetime"]
         if duration_time > datetime.timedelta(days=60) or page_size > 50 or page_size < 1:
@@ -185,10 +190,10 @@ class AliyunInstance(BasicDataFrame):
         df_data = pd.DataFrame(json_data)
         # if not df_data.empty:
         #     df_data.sort_values(by=['Timestamp'],inplace=True)
-        self.MetricData = df_data
+        self.metric_data = df_data
         return df_data
     
-    def getMetricLast_NextToken(self,region_id,metric_name,Period="60",dimensions_df:list=None,instance_list:list=None,TimeDict=None,rename_field_name=None,page_size=50,express=None) -> pd.DataFrame:
+    def get_metric_last_next_token(self,region_id,metric_name,Period="60",dimensions_df:list=None,instance_list:list=None,TimeDict=None,rename_field_name=None,page_size=50,express=None) -> pd.DataFrame:
         if rename_field_name is None:
             rename_field_name = metric_name
         client = AcsClient(region_id=region_id, credential=self.credentials)
@@ -235,8 +240,28 @@ class AliyunInstance(BasicDataFrame):
         df_data.rename(columns={col: f'{rename_field_name}_{col}' for col in df_data.columns if col not in ['instanceId','timestamp','userId']}, inplace=True)
         return df_data
     
+    # ==================== 已废弃的 camelCase 兼容别名 ==================== #
+    # 老代码通过以下别名调用仍可正常工作，但会触发 DeprecationWarning，
+    # 请迁移至对应的 snake_case 方法，别名将在未来版本中移除。
+
+    @deprecated_alias("get_metric_list")
+    def getMetricList(self, *args, **kwargs):  # noqa: N802
+        """[已废弃别名] 请改用 get_metric_list"""
+        return self.get_metric_list(*args, **kwargs)
+
+    @deprecated_alias("get_metric_data")
+    def getMetricData(self, *args, **kwargs):  # noqa: N802
+        """[已废弃别名] 请改用 get_metric_data"""
+        return self.get_metric_data(*args, **kwargs)
+
+    @deprecated_alias("get_metric_last_next_token")
+    def getMetricLast_NextToken(self, *args, **kwargs):  # noqa: N802
+        """[已废弃别名] 请改用 get_metric_last_next_token"""
+        return self.get_metric_last_next_token(*args, **kwargs)
+
     # 子类自行实现适配
     # def getInsInfo():
+
     #     pass
 
     # def getInsData():
